@@ -1,0 +1,386 @@
+---
+title: "final_project"
+author: "YunranChen"
+date: "11/14/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(MASS)
+library(dplyr)
+library(purrr)
+library(tidyr)
+library(reshape2)
+library("forcats")
+library(mvtnorm)
+library("coda")
+library(ggplot2)
+theme_set(theme_bw())
+library(MCMCpack)
+#rm(list=ls())
+library(gtable)
+library(grid)
+#install.packages("gridExtra")
+library(gridExtra)
+library(gtools)
+```
+
+
+## generate AR(1): 1 example
+
+```{r}
+set.seed(123)
+##generate AR(1)
+v=1
+phi=0.9
+n=5000
+burnin=0
+ar1=function(v,phi,n,burnin=0){
+  s=v/(1-phi^2)
+  x0=rnorm(1,0,sqrt(s))
+x=rep(0,n)
+x[1]=x0
+epi=rnorm(n,0,sqrt(v))
+for (i in 2:n){
+  x[i]=x[i-1]*phi+epi[i]
+}
+  return(x[(burnin+1):n])
+}
+x1=ar1(v,phi,n)
+x2=ar1(v,phi,n)
+
+#x1=arima.sim(model=list(ar=c(phi),sd=sqrt(v)),n=n)
+#x2=arima.sim(model=list(ar=c(phi),sd=sqrt(v)),n=n)
+z=x1*x2
+df=data.frame(x1=x1,x2=x2,z=z,time=(burnin+1):n)%>%gather(key = var,value = value,-time)
+ggplot(data = df,mapping = aes(x = time,y=value))+geom_line()+facet_grid(var~.)
+ggsave("example1.pdf")
+
+## ACF, PACF
+bacfx1 <- acf(x1, lag.max = 50,plot = FALSE)
+bacfx2 <- acf(x2, lag.max = 50,plot = FALSE)
+bacfz <- acf(z, lag.max = 50,plot = FALSE)
+bacfdf <- data.frame(acf=c(bacfx1$acf,bacfx2$acf,bacfz$acf),lag=rep(0:50,3),var=rep(c("x1","x2","z"),each=51))
+ggplot(data = bacfdf, mapping = aes(x = lag, y = acf)) +
+       geom_hline(aes(yintercept = 0)) +
+       geom_segment(mapping = aes(xend = lag, yend = 0))+
+    geom_hline(aes(yintercept = 0.05), linetype = 2, color = 'darkblue')+
+    facet_grid(var~.)+
+    geom_hline(aes(yintercept = -0.05), linetype = 2, color = 'darkblue')
+ggsave("exacf.pdf")
+# pacf
+bpacfx1 <- pacf(x1, lag.max = 50,plot = FALSE)
+bpacfx2 <- pacf(x2, lag.max = 50,plot = FALSE)
+bpacfz <- pacf(z, lag.max = 50,plot = FALSE)
+bpacfdf <- data.frame(acf=c(bpacfx1$acf,bpacfx2$acf,bpacfz$acf),lag=rep(1:50,3),var=rep(c("x1","x2","z"),each=50))
+ggplot(data = bpacfdf, mapping = aes(x = lag, y = acf)) +
+       geom_hline(aes(yintercept = 0)) +
+       geom_segment(mapping = aes(xend = lag, yend = 0))+
+    geom_hline(aes(yintercept = 0.05), linetype = 2, color = 'darkblue')+
+    facet_grid(var~.)+
+    geom_hline(aes(yintercept = 0.05), linetype = 2, color = 'darkblue')
+ggsave("expacf.pdf")
+```
+
+## generate AR(1)s: EZ,VarZ,AcfZ,PacfZ
+
+```{r}
+set.seed(123)
+ns=5000
+n=100
+X1=sapply(1:ns,function(x){arima.sim(model=list(ar=c(phi),sd=sqrt(v)),n=n)})
+X2=sapply(1:ns,function(x){arima.sim(model=list(ar=c(phi),sd=sqrt(v)),n=n)})
+Z=X1*X2
+meanz=apply(Z,1,mean)
+mzdf=data.frame(mean=meanz,time=1:n)
+pmz=ggplot(data = mzdf,mapping = aes(x=time,y=mean))+geom_point()+geom_hline(yintercept = 0)
+phmz=ggplot(data = mzdf,mapping = aes(x=mean))+geom_histogram(fill="white",color="black")+geom_vline(xintercept = 0)
+mzs=grid.arrange(pmz,phmz, nrow = 1)
+ggsave(filename = "EZ.pdf",width = 18,height = 6,plot = mzs)
+
+varz=sapply(1:5000,function(ii){
+  X1=sapply(1:ns,function(x){ar1(v,phi,n)})
+X2=sapply(1:ns,function(x){ar1(v,phi,n)})
+Z=X1*X2
+varz=apply(Z,1,var)
+return(varz)
+})
+varzm=apply(varz,1,mean)
+varzdf=data.frame(mean=varzm,time=1:n)
+pvz=ggplot(data = varzdf,mapping = aes(x=time,y=mean))+geom_point()+geom_hline(yintercept = (v/(1-phi^2))^2)
+phvz=ggplot(data = varzdf,mapping = aes(x=mean))+geom_histogram(fill="white",color="black")+geom_vline(xintercept = (v/(1-phi^2))^2)
+vzs=grid.arrange(pvz,phvz, nrow = 1)
+ggsave(filename = "VarZ.pdf",width = 18,height = 6,plot = vzs)
+
+acfz=sapply(1:ns,function(x){acf(Z[,x], lag.max = 10,plot = FALSE)$acf})%>%apply(.,1,mean)
+acfzdf=data.frame(acf=c(acfz,(phi*phi)^(0:10)),lag=c(0:10,0:10),par=rep(c("simulation","true"),each=11))
+p.acf=ggplot(data = acfzdf, mapping = aes(x = lag, y = acf)) +
+       geom_hline(aes(yintercept = 0)) +
+       geom_linerange(mapping = aes(ymin = 0, ymax = acf,color=par),position = position_dodge(.5))+
+    geom_hline(aes(yintercept = 0.05), linetype = 2, color = 'darkblue')
+pacfz=sapply(1:ns,function(x){pacf(Z[,x], lag.max = 10,plot = FALSE)$acf})%>%apply(.,1,mean)
+pacfzdf=data.frame(acf=c(pacfz,c(phi*phi,rep(0,9))),lag=c(1:10,1:10),par=rep(c("simulation","true"),each=10))
+p.pacf=ggplot(data = pacfzdf, mapping = aes(x = lag, y = acf)) +
+       geom_hline(aes(yintercept = 0)) +
+       geom_linerange(mapping = aes(ymin = 0, ymax = acf,color=par),position = position_dodge(.5))+
+    geom_hline(aes(yintercept = 0.05), linetype = 2, color = 'darkblue')
+acfzs=grid.arrange(p.acf,p.pacf, nrow = 1)
+ggsave(filename = "ZACF10000.pdf",width = 18,height = 6,plot = acfzs)
+
+```
+
+## distribution of Zt, Pit 
+
+```{r}
+set.seed(123)
+ns=5000
+n=100
+
+distzpi=function(phi1,phi2,v1,v2,n,ns){
+  set.seed(123)
+  ts=5
+  X1=sapply(1:ns,function(x){ar1(v1,phi1,n)})
+X2=sapply(1:ns,function(x){ar1(v2,phi2,n)})
+Z=X1*X2
+zh=data.frame(x1=X1[ts,],x2=X2[ts,],z=Z[ts,],pi=exp(Z[ts,]%>%as.vector())/(1+exp(Z[ts,])),phi1=phi1,phi2=phi2,v1=v1,v2=v2)
+return(zh)
+}
+```
+
+## influence of same v1=v2=1, phi1=phi2=0.1-0.9
+
+```{r}
+zh=distzpi(0.1,0.1,1,1,10,5000)
+for (i in seq(0.3,0.9,by = 0.2)){
+  zh=rbind(zh,distzpi(i,i,1,1,10,5000))
+}
+aczh=zh%>%filter(phi1==0.1)
+p1=ggplot(data = aczh,mapping = aes(x=x1))+geom_histogram()
+p2=ggplot(data = aczh,mapping = aes(x=x2))+geom_histogram()
+p3=ggplot(data = aczh,mapping = aes(x=z))+geom_histogram()
+p4=ggplot(data = aczh,mapping = aes(x=pi))+geom_histogram()
+ps1=grid.arrange(p1,p2,p3,p4, nrow = 1)
+aczh=zh%>%filter(phi1==0.3)
+p1=ggplot(data = aczh,mapping = aes(x=x1))+geom_histogram()
+p2=ggplot(data = aczh,mapping = aes(x=x2))+geom_histogram()
+p3=ggplot(data = aczh,mapping = aes(x=z))+geom_histogram()
+p4=ggplot(data = aczh,mapping = aes(x=pi))+geom_histogram()
+ps3=grid.arrange(p1,p2,p3,p4, nrow = 1)
+aczh=zh%>%filter(phi1==0.5)
+p1=ggplot(data = aczh,mapping = aes(x=x1))+geom_histogram()
+p2=ggplot(data = aczh,mapping = aes(x=x2))+geom_histogram()
+p3=ggplot(data = aczh,mapping = aes(x=z))+geom_histogram()
+p4=ggplot(data = aczh,mapping = aes(x=pi))+geom_histogram()
+ps5=grid.arrange(p1,p2,p3,p4, nrow = 1)
+aczh=zh%>%filter(phi1==0.7)
+p1=ggplot(data = aczh,mapping = aes(x=x1))+geom_histogram()
+p2=ggplot(data = aczh,mapping = aes(x=x2))+geom_histogram()
+p3=ggplot(data = aczh,mapping = aes(x=z))+geom_histogram()
+p4=ggplot(data = aczh,mapping = aes(x=pi))+geom_histogram()
+ps7=grid.arrange(p1,p2,p3,p4, nrow = 1)
+aczh=zh%>%filter(phi1==0.9)
+p1=ggplot(data = aczh,mapping = aes(x=x1))+geom_histogram()
+p2=ggplot(data = aczh,mapping = aes(x=x2))+geom_histogram()
+p3=ggplot(data = aczh,mapping = aes(x=z))+geom_histogram()
+p4=ggplot(data = aczh,mapping = aes(x=pi))+geom_histogram()
+ps9=grid.arrange(p1,p2,p3,p4, nrow = 1)
+psall=grid.arrange(ps1,ps3,ps5,ps7,ps9,nrow=5)
+ggsave(filename = "v1phi0.1.pdf",width = 18,height = 6,plot = ps1)
+ggsave(filename = "v1phi0.3.pdf",width = 18,height = 6,plot = ps3)
+ggsave(filename = "v1phi0.5.pdf",width = 18,height = 6,plot = ps5)
+ggsave(filename = "v1phi0.7.pdf",width = 18,height = 6,plot = ps7)
+ggsave(filename = "v1phi0.9.pdf",width = 18,height = 6,plot = ps9)
+ggplot(data = zh,mapping = aes(x=x1))+geom_histogram()+facet_wrap(~phi1)
+ggsave(filename = "v1phix1.pdf",width = 18,height = 9)
+ggplot(data = zh,mapping = aes(x=z))+geom_histogram()+facet_wrap(~phi1)
+ggsave(filename = "v1phiz.pdf",width = 18,height = 9)
+ggplot(data = zh,mapping = aes(x=pi))+geom_histogram()+facet_wrap(~phi1)
+ggsave(filename = "v1phipi.pdf",width = 18,height = 9)
+
+```
+
+## influence of same phi1=phi2=0.5, v1=v2=0.99,0.75,0.19; phi1=phi2=0.1,v1=v2=0.75; phi1=phi2=0.9,v1=v2=0.99.
+
+```{r}
+pars1=matrix(c(0.5,0.99,0.5,0.75,0.5,0.19,0.1,0.99,0.9,0.19),nrow=5,ncol=2,byrow = TRUE)
+zh=distzpi(pars1[1,1],pars1[1,1],pars1[1,2],pars1[1,2],10,5000)
+for (i in 2:nrow(pars1)){
+  zh=rbind(zh,distzpi(pars1[i,1],pars1[i,1],pars1[i,2],pars1[i,2],10,5000))
+}
+zh=zh%>%mutate(index=rep(1:5,each=5000))
+## same phi, different v
+aczh=zh%>%filter(phi1==0.5)
+p1=ggplot(data = aczh,mapping = aes(x=x1))+geom_histogram()+facet_grid(.~v1)
+p2=ggplot(data = aczh,mapping = aes(x=x2))+geom_histogram()+facet_grid(.~v1)
+p3=ggplot(data = aczh,mapping = aes(x=z))+geom_histogram()+facet_grid(.~v1)
+p4=ggplot(data = aczh,mapping = aes(x=pi))+geom_histogram()+facet_grid(.~v1)
+dphiss=grid.arrange(p1,p3,p4, nrow = 3)
+ggsave("samephidiffv.pdf",dphiss)
+## same s, different phi -- depends on s
+aczh=zh%>%filter(index%in%c(2,4,5))
+p1=ggplot(data = aczh,mapping = aes(x=x1))+geom_histogram()+facet_grid(.~phi1)
+p2=ggplot(data = aczh,mapping = aes(x=x2))+geom_histogram()+facet_grid(.~phi1)
+p3=ggplot(data = aczh,mapping = aes(x=z))+geom_histogram()+facet_grid(.~phi1)
+p4=ggplot(data = aczh,mapping = aes(x=pi))+geom_histogram()+facet_grid(.~phi1)
+dphiss=grid.arrange(p1,p3,p4, nrow = 3)
+ggsave("diffphiss.pdf",dphiss)
+
+```
+
+
+## Influence of different parameter setting on distribution of Zt, Pit (Identifiablity)
+
+```{r}
+
+```
+
+## Distribution of Zt, Pit in the network 3 \times 3
+
+```{r}
+
+```
+
+## Influence of different parameter setting on Distribution of Zt, Pit in the network 
+
+```{r}
+
+```
+
+
+
+
+```{r}
+library("forecast")
+```
+
+```{r}
+load("Data.RData")
+dim(Y_arr)
+
+```
+
+```{r}
+distzpii=function(phi1,phi2,v1,v2,n,ns){
+  set.seed(123)
+  ts=5
+  X1=sapply(1:ns,function(x){ar1(v1,phi1,n)})
+X2=sapply(1:ns,function(x){ar1(v2,phi2,n)})
+Z=X1*X2
+zh=data.frame(x1=X1[ts,],x2=X2[ts,],z=Z[ts,],pi=exp(Z[ts,])/(1+exp(Z[ts,])),init=exp(Z[1,])/(1+exp(Z[1,])),phi1=phi1,phi2=phi2,v1=v1,v2=v2)
+return(zh)
+}
+try=distzpii(0.9,0.9,1,1,10,5000)
+try=try%>%mutate(ind=as.numeric(init>0.5))
+ggplot(data = try,mapping = aes(x=pi))+geom_histogram()+facet_grid(.~ind)
+ggsave(filename = "phi0.9v1init.pdf",width = 12,height = 6)
+
+phi1=phi2=0.9
+v1=v2=1
+n=10
+ns=5000
+set.seed(123)
+
+  X1=sapply(1:ns,function(x){ar1(v1,phi1,n)})
+X2=sapply(1:ns,function(x){ar1(v2,phi2,n)})
+Z=X1*X2
+Pi=exp(Z)/(1-exp(Z))
+dim(Pi)
+piacf=apply(Pi,2,function(x){acf(x = x,lag.max = 10,plot = FALSE)$acf})
+dim(piacf)
+ci=HPDinterval(as.mcmc(t(piacf)), prob=0.95)
+pim=apply(piacf,1,mean)
+cidf=data_frame(lower=ci[,1],upper=ci[,2],mean=pim)
+cidf=cidf%>%mutate(time=0:9)
+p1=ggplot(cidf, aes(x=time))+geom_ribbon(aes(ymin=lower,ymax=upper),fill=gray(0.9))+geom_line(mapping = aes(y=mean))#+ylab(expression(mu(t)))#+geom_line(mapping = aes(y=estimate),linetype="dashed")#+ggtitle("(d)")
+phi1=phi2=0.1
+v1=v2=1
+n=10
+ns=5000
+set.seed(123)
+
+  X1=sapply(1:ns,function(x){ar1(v1,phi1,n)})
+X2=sapply(1:ns,function(x){ar1(v2,phi2,n)})
+Z=X1*X2
+Pi=exp(Z)/(1-exp(Z))
+dim(Pi)
+piacf=apply(Pi,2,function(x){acf(x = x,lag.max = 10,plot = FALSE)$acf})
+dim(piacf)
+ci=HPDinterval(as.mcmc(t(piacf)), prob=0.95)
+pim=apply(piacf,1,mean)
+cidf=data_frame(lower=ci[,1],upper=ci[,2],mean=pim)
+cidf=cidf%>%mutate(time=0:9)
+ggplot(cidf, aes(x=time))+geom_ribbon(aes(ymin=lower,ymax=upper),fill=gray(0.9))+geom_line(mapping = aes(y=mean))#+ylab(expression(mu(t)))#+geom_line(mapping = aes(y=estimate),linetype="dashed")#+ggtitle("(d)")
+p1+ylab("acf")
+ggsave(filename = "acfpi.pdf")
+```
+
+```{r}
+N=6
+set.seed(2)
+pro_cx=function(phi_x,N,s_x){
+  c_x<-matrix(0,N,N)
+for (i in 1:N){
+  for (j in 1:N){
+    c_x[i,j]<-phi_x^(abs(i-j))*s_x
+  }}
+  return(c_x)
+}
+X=sapply(rep(c(0.9,0.5,0.1),each=5),function(x){mvrnorm(n=1,mu=rep(0,N),Sigma = pro_cx(x,N,1))})
+t(X)
+V=15
+X_arr=array(data = as.vector(t(X)),dim = c(V,1,N)) 
+pi_arr=array(dim=c(V,V,N))
+Y_arr=array(dim=c(V,V,N))
+for (t in 1:N){
+  pi_arr[,,t]=1/(1+exp(-(X_arr[,,t]%*%t(X_arr[,,t]))))
+  for (i in 2:V){
+    for (j in 1:(i-1)){
+      Y_arr[i,j,t]=sample(x = c(1,0),size = 1,prob = c(pi_arr[i,j,t],1-pi_arr[i,j,t]))
+    }
+  }
+}
+pi_arr1=pi_arr
+Y_arr1=Y_arr
+Y_arr=pi_arr1
+matls=map(1:dim(Y_arr)[3], function(i){
+  V=dim(Y_arr)[1]
+  matY=Y_arr[,,i]
+  rownames(matY)=paste0("R",1:V)
+    colnames(matY)=paste0("C",1:V)
+  return(matY)
+})
+library(reshape2)
+melted_mat <- melt(matls)
+melted_mat=melted_mat%>%mutate(Var1=fct_rev(Var1))
+ggplot(data = melted_mat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile()+
+  scale_fill_continuous(low="white", high="red") +
+  labs(x="", y="", title="")+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))+
+  facet_wrap(~L1)
+ggsave(filename = "phissnet.pdf",width = 12,height = 8)
+X=sapply(rep(c(0.5,0.5,0.5),each=5),function(x){mvrnorm(n=1,mu=rep(0,N),Sigma = pro_cx(x,N,1))})
+t(X)
+V=15
+X_arr=array(data = as.vector(t(X)),dim = c(V,1,N)) 
+pi_arr=array(dim=c(V,V,N))
+Y_arr=array(dim=c(V,V,N))
+for (t in 1:N){
+  pi_arr[,,t]=1/(1+exp(-(X_arr[,,t]%*%t(X_arr[,,t]))))
+  for (i in 2:V){
+    for (j in 1:(i-1)){
+      Y_arr[i,j,t]=sample(x = c(1,0),size = 1,prob = c(pi_arr[i,j,t],1-pi_arr[i,j,t]))
+    }
+  }
+}
+Y_arr2=Y_arr
+pi_arr2=pi_arr
+
+for (t in 1:N){
+  pi_arr1[,,t][upper.tri(pi_arr1[,,t],diag = FALSE)]=pi_arr2[,,t][upper.tri(pi_arr2[,,t],diag = FALSE)]
+  diag(pi_arr1[,,t])=NA
+}
+```
+

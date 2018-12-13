@@ -1,0 +1,536 @@
+---
+title: "Asy_Evaluation_0618"
+author: "YunranChen"
+date: "6/13/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(MASS)
+library(dplyr)
+library(purrr)
+library(tidyr)
+library(reshape2)
+library("forcats")
+library(mvtnorm)
+library("coda")
+library(ggplot2)
+theme_set(theme_bw())
+library(MCMCpack)
+library("pROC")
+library("stringr")
+```
+
+# read data
+
+```{r}
+
+rm(list=ls())
+####GP
+
+```
+
+## fitted
+
+## all.txt
+
+```{r}
+rdata.ls=list.files(path = ".", pattern = "*RData", all.files = FALSE,
+                       full.names = FALSE, recursive = FALSE,
+                       ignore.case = FALSE, include.dirs = FALSE, no.. = FALSE)
+#rdata=rdata.ls[1:19]
+for (rdata in rdata.ls[22:39]){
+  rm(list=ls()[!ls()%in%c("rdata.ls","rdata")])
+  load(rdata)
+  strs=str_split(rdata,"1127|_ID|.RData",simplify = TRUE)
+  ID=strs[3]
+  pars=paste0(strs[1],strs[2])
+  #pars=strs[2]
+Pi_est=pi_arr_est_cache[,(burnin+1):niter] #samples
+pi_est_pos=Pi_est%>%apply(.,1,mean) # posterior mean
+pi_est_pos_arr=array(pi_est_pos,dim=c(V,V,N))
+for (t in 1:N){
+  diag(pi_est_pos_arr[,,t])=NA
+  #diag(pi_arr[,,t])=NA
+  diag(Y_arr[,,t])=NA
+}
+#pi_true_vec=pi_arr%>%as.vector(.)
+yij_vec=Y_arr%>%as.vector(.)
+auc=auc(roc(yij_vec,pi_est_pos,direction = "<"))
+yij_vec_p=Y_arr[,,N]%>%as.vector(.)
+auc_p=auc(roc(yij_vec_p,pi_est_pos_arr[,,N]%>%as.vector(.),direction = "<"))
+pi_est_pos_arr[,,N]=NA
+yij_vec_f=Y_arr%>%as.vector(.)
+auc_f=auc(roc(yij_vec_f,pi_est_pos_arr%>%as.vector(.),direction = "<"))
+
+effsize_pi=apply(Pi_est,1,function(x){effectiveSize(as.mcmc(x))})
+eff_pi=c(min(effsize_pi),median(effsize_pi),mean(effsize_pi),max(effsize_pi))
+mu_cache=mu_cache[,(burnin+1):niter]
+effsize_mu=apply(mu_cache,1,function(x){effectiveSize(as.mcmc(x))})
+eff_mu=c(min(effsize_mu),median(effsize_mu),mean(effsize_mu),max(effsize_mu))
+proc_time=((future-now)/60/60/24)[3]
+if (!any(ls()%in%"tao_cache")){
+      cat(ID, pars, round(c(auc_f,auc_p,auc),4),round(c(eff_pi,eff_mu),2),round(proc_time,4),"\n", file = "1124all_ar.txt", append = TRUE)
+cat(ID, pars, round(c(auc_f,auc_p,auc),4),"\n", file = "1124auc_ar.txt", append = TRUE)
+}else if (all(is.na(tao_cache))){
+cat(ID, pars, round(c(auc_f,auc_p,auc),4),round(c(eff_pi,eff_mu),2),round(proc_time,4),"\n", file = "1124all_ar.txt", append = TRUE)
+cat(ID, pars, round(c(auc_f,auc_p,auc),4),"\n", file = "1124auc_ar.txt", append = TRUE)}else{
+tau_cache=tao_cache[,(burnin+1):niter]
+effsize_tau=apply(tau_cache,1,function(x){effectiveSize(as.mcmc(x))})
+eff_tau=c(min(effsize_tau),median(effsize_tau),mean(effsize_tau),max(effsize_tau))
+tau=tau_cache%>%apply(.,1,mean)
+tau_inv=1/tau
+cat(ID, pars, round(c(auc_f,auc_p,auc),4),round(c(eff_pi,eff_mu),2),round(proc_time,4),round(eff_tau,2),round(tau_inv,4),"\n", file = "1124all_ar.txt", append = TRUE)
+cat(ID, pars, round(c(auc_f,auc_p,auc),4),"\n", file = "1124auc_ar.txt", append = TRUE)
+}
+}
+#load("tsar1119_mis_notau_ID12.RData")
+```
+
+## for pi
+
+```{r}
+Pi_est=pi_arr_est_cache[,(burnin+1):niter] #samples
+pi_est_pos=Pi_est%>%apply(.,1,mean) # posterior mean
+pi_est_pos_arr=array(pi_est_pos,dim=c(V,V,N))
+
+for (t in 1:N){
+  diag(pi_est_pos_arr[,,t])=NA
+  diag(pi_arr[,,t])=NA
+}
+pi_true_vec=pi_arr%>%as.vector(.)
+```
+
+
+## draw pi_s
+
+```{r}
+pi_ggdf=data_frame(true=pi_true_vec,estimate=pi_est_pos)
+p=ggplot(data = pi_ggdf,mapping = aes(x=true,y=estimate))+geom_point()+geom_abline(slope = 1,intercept = 0)+coord_equal(ratio=1)+ggtitle("(a)")
+print(p)
+ggsave(filename = "pis.eps")
+dev.off()
+```
+
+
+##AUC
+
+```{r}
+Y_arr0=Y_arr
+Y_arr0[,,N]=NA
+yij_vec=Y_arr0%>%as.vector(.)
+roc_a=roc(yij_vec,pi_est_pos,direction = "<")
+roca=ggroc(data = roc_a)+coord_equal(ratio=1)+ggtitle("(b)")
+ggsave(filename = "roc_a.eps")
+
+auc=auc(roc(yij_vec,pi_est_pos,direction = "<"))
+yij_vec_p=Y_arr[,,N]%>%as.vector(.)
+roc_p=roc(yij_vec_p,pi_est_pos_arr[,,N]%>%as.vector(.),direction = "<")
+rocp=ggroc(data = roc_p)+coord_equal(ratio=1)+ggtitle("(c)")
+ggsave(filename = "roc_p.eps")
+auc_p=auc(roc_p)
+```
+
+```{r}
+library(gtable)
+library(grid)
+#install.packages("gridExtra")
+library(gridExtra)
+g1 <- ggplotGrob(p)
+g2 <- ggplotGrob(roca)
+g3 <- ggplotGrob(rocp)
+g <- rbind(g1,g2, g3, size = "first")
+g$widths <- unit.pmax(g1$widths,g2$widths, g3$widths)
+grid.newpage()
+grid.draw(g)
+gg=grid.arrange(g1,g2,g3, nrow = 1)
+ggsave(filename = "abc.eps",width = 18,height = 6,plot = gg)
+```
+
+## effsize for all
+
+```{r}
+effsize_pi=apply(Pi_est,1,function(x){effectiveSize(as.mcmc(x))})
+eff_pi=c(min(effsize_pi),median(effsize_pi),mean(effsize_pi),max(effsize_pi))
+mu_cache=mu_cache[,(burnin+1):niter]
+effsize_mu=apply(mu_cache,1,function(x){effectiveSize(as.mcmc(x))})
+eff_mu=c(min(effsize_mu),median(effsize_mu),mean(effsize_mu),max(effsize_mu))
+beta_cache=beta_cache[,(burnin+1):niter]
+effsize_beta=apply(beta_cache,1,function(x){effectiveSize(as.mcmc(x))})
+eff_beta=c(min(effsize_beta),median(effsize_beta),mean(effsize_beta),max(effsize_beta))
+tau_cache=tao_cache[,(burnin+1):niter]
+effsize_tau=apply(tau_cache,1,function(x){effectiveSize(as.mcmc(x))})
+eff_tau=c(min(effsize_tau),median(effsize_tau),mean(effsize_tau),max(effsize_tau))
+a_cache=a_cache[,,(burnin+1):niter]
+effsize_a=apply(a_cache%>%matrix(.,nrow=N*V),1,function(x){effectiveSize(as.mcmc(x))})
+eff_a=c(min(effsize_a),median(effsize_a),mean(effsize_a),max(effsize_a))
+b_cache=b_cache[,,(burnin+1):niter]
+effsize_b=apply(b_cache%>%matrix(.,nrow=N*V),1,function(x){effectiveSize(as.mcmc(x))})
+eff_b=c(min(effsize_b),median(effsize_b),mean(effsize_b),max(effsize_b))
+```
+
+## histgram for pi effective sample size
+
+```{r}
+effsize_pidf=data.frame(pi=effsize_pi)
+ggplot(data = effsize_pidf,mapping = aes(pi))+geom_histogram(fill="white",color="black")+xlab(expression(hat(pi)[ij]))
+ggsave(filename = "effsizepi.eps",width = 8,height = 6)
+#dev.print(pdf, paste0(today,"_",pars,"_TASKID",ID,"_effsizepi",".pdf"))
+dev.off()
+```
+
+## draw the matrix of pij(t) and difference matrix
+
+```{r}
+timepoint=c(10,20,30,40)
+matls=map(timepoint,function(t){
+  #diag(pi_est_pos_arr[,,t])=NA
+  mat=pi_est_pos_arr[,,t]
+  colnames(mat)=paste0("C",1:V)
+  rownames(mat)=paste0("R",1:V)
+  return(mat)
+})
+longDatae=melt(matls)%>%mutate(group="estimate")
+
+matlst=map(timepoint,function(t){
+  #diag(pi_arr[,,t])=NA
+  mat=pi_arr[,,t]
+  colnames(mat)=paste0("C",1:V)
+  rownames(mat)=paste0("R",1:V)
+  return(mat)
+})
+longDatat=melt(matlst)%>%mutate(group="true")
+longdata_diff=longDatat%>%mutate(group="difference",value=abs(longDatae$value-longDatat$value))
+longData_all=rbind(longDatae,longDatat,longdata_diff)
+longData_all=longData_all%>%mutate(Var1=fct_rev(Var1),time=timepoint[L1])
+
+
+
+  
+  #jpeg(filename=paste0("Setting",pars,"_TASKID",ID,"_pi",t,"_0702.jpeg"))
+ggplot(longData_all, aes(x = Var2, y = Var1)) + 
+  geom_tile(aes(fill=value)) + facet_grid(group~time )+
+  scale_fill_continuous(low="white", high="red") +
+  #scale_fill_gradient(low="white", high="#333333",na.value = "black") + #
+  #scale_fill_grey( start = 0.1, end = 0.8, na.value = "black",aesthetics = "fill")+
+  #scale_fill_gradientn(colors = gray(seq(0,0.8,10)))+
+  #scale_fill_grey( start = 0.2, end = 0.8, na.value = "red")+
+  #scale_fill_material("grey")+
+  labs(x="col", y="row", title="Matrix") +
+  theme_bw() + theme(axis.text.x=element_blank(),#element_text(size=9, angle=90, vjust=0.3),
+                     axis.text.y=element_blank(),#element_text(size=9),
+                     plot.title=element_text(size=11))+ggtitle("")+xlab("")+ylab("")+
+  guides(fill = guide_colourbar(barheight = 18))
+#print(p)
+#dev.print(pdf, paste0(today,"_",pars,"_TASKID",ID,"_matpi",".pdf"))
+ggsave(filename = "testing.svg")
+ggsave(filename = "matpi.eps",scale = 1,width = 8,height = 6)
+#dev.print(pdf, paste0(today,"_",pars,"_TASKID",ID,"_matpigrey",".pdf"))
+
+```
+
+##mu(t),beta(t)
+
+```{r}
+ci_mu=HPDinterval(as.mcmc(t(mu_cache)), prob=0.95)
+ci_mu=ci_mu%>%as_tibble()
+time = 1:N
+mu_ggdf=data_frame(time=time,estimate=apply(mu_cache,1,mean),lower=ci_mu%>%pull(lower),upper=ci_mu%>%pull(upper))%>%mutate(group="mu",true=mu)
+pmut1=ggplot(mu_ggdf, aes(x=time))+geom_ribbon(aes(ymin=lower,ymax=upper),fill=gray(0.9))+geom_line(mapping = aes(y=true))+ylab(expression(mu(t)))+geom_line(mapping = aes(y=estimate),linetype="dashed")+ggtitle("(a)")
+ggsave(filename = "mut.eps",width = 8,height = 6)
+
+
+ci=HPDinterval(as.mcmc(t(Pi_est)), prob=0.95)
+ci=ci%>%as_tibble()
+pi_ggdf=data_frame(row=rep(1:V,V*N),col=rep(rep(1:V,each=V),N),time=rep(1:N,each=V*V),estimate=apply(Pi_est,1,mean),lower=ci%>%pull(lower),upper=ci%>%pull(upper))
+for (i in 1:V){
+  for (j in 2:(i-1)){
+    piij_ggdf=pi_ggdf%>%
+  dplyr::filter(row==i,col==j)%>%
+  dplyr::select(.,-row,-col)%>%
+  mutate(group="pi",true=pi_arr[j,i,])
+
+ppit1=ggplot(piij_ggdf, aes(x=time))+geom_ribbon(aes(ymin=lower,ymax=upper),fill=gray(0.9))+geom_line(mapping = aes(y=true))+ylab(expression(pi[list(5,8)](t)))+geom_line(mapping = aes(y=estimate),linetype="dashed")+ggtitle(paste0(i,",",j))#+ggtitle("(b)")
+print(ppit1)
+  }
+}
+i=12
+j=8
+piij_ggdf=pi_ggdf%>%
+  dplyr::filter(row==i,col==j)%>%
+  dplyr::select(.,-row,-col)%>%
+  mutate(group="pi",true=pi_arr[j,i,])
+
+ppit1=ggplot(piij_ggdf, aes(x=time))+geom_ribbon(aes(ymin=lower,ymax=upper),fill=gray(0.9))+geom_line(mapping = aes(y=true))+ylab(expression(pi[list(12,8)](t)))+geom_line(mapping = aes(y=estimate),linetype="dashed")+ggtitle("(b)")#+ggtitle(paste0(i,",",j))#
+
+ggsave(filename = "pi58.eps",width = 8,height = 6)
+
+
+```
+
+
+```{r}
+library(gtable)
+library(grid)
+#install.packages("gridExtra")
+library(gridExtra)
+g1 <- ggplotGrob(pat)
+g2 <- ggplotGrob(pbt)
+g <- rbind(g1,g2, size = "first")
+g$widths <- unit.pmax(g1$widths,g2$widths, g3$widths)
+gg=grid.arrange(g1,g2, nrow = 1)
+ggsave(filename = "abt.eps",width = 18,height = 6,plot = gg)
+
+#g1 <- ggplotGrob(pat)
+#g2 <- ggplotGrob(pbt)
+#g <- rbind(g1,g2, size = "first")
+#g$widths <- unit.pmax(g1$widths,g2$widths, g3$widths)
+gg=grid.arrange(pmut1,ppit1, ncol=2)
+ggsave(filename = "mupi.eps",width = 18,height = 12,plot = gg)
+
+```
+
+##pij(t)
+
+```{r}
+ci=HPDinterval(as.mcmc(t(Pi_est)), prob=0.95)
+ci=ci%>%as_tibble()
+#pi_ggdf=data_frame(row=rep(1:V,V*N),col=rep(rep(1:V,each=V),N),time=rep(1:N,each=V*V),pi_est=apply(Pi_est,1,mean),lower=apply(Pi_est,1,quantile,0.025),upper=apply(Pi_est,1,quantile,0.975))
+pi_ggdf=data_frame(row=rep(1:V,V*N),col=rep(rep(1:V,each=V),N),time=rep(1:N,each=V*V),pi_est=apply(Pi_est,1,mean),lower=ci%>%pull(lower),upper=ci%>%pull(upper))
+#
+#for (i in 1:V){
+#  for (j in 1:V){
+#    piij_ggdf=pi_ggdf%>%filter(row==i,col==j)%>%dplyr::select(.,-row,-col)
+#    #jpeg(filename=paste0("pi_",i,j,"(t)_seed2.jpeg"))
+#p=ggplot(piij_ggdf, aes(x=time))+geom_line(mapping = #aes(y=pi_est),linetype="dashed")+geom_ribbon(aes(ymin=lower,ymax=upper),fill="lightblue",alpha=0.3)+geom_line(mapping = #aes(y=pi_true),data = data_frame(pi_true=pi_arr[i,j,]))+ggtitle(paste0("pi_",i,"_",j))
+#print(p)
+#  #dev.off()
+#  }
+#}
+kij=matrix(c(5,11,7,6,9,1),nrow=2)
+for (k in 1:3){
+  i=kij[1,k]
+  j=kij[2,k]
+    piij_ggdf=pi_ggdf%>%filter(row==i,col==j)%>%dplyr::select(.,-row,-col)
+    jpeg(filename=paste0("Setting",pars,"_TASKID",ID,"_pi_",i,"_",j,"(t)","_0702.jpeg"))
+p=ggplot(piij_ggdf, aes(x=time))+geom_line(mapping = aes(y=pi_est),linetype="dashed")+geom_ribbon(aes(ymin=lower,ymax=upper),fill="lightblue",alpha=0.3)+geom_line(mapping = aes(y=pi_true),data = data_frame(pi_true=pi_arr[i,j,]))+ggtitle(paste0("pi_",i,"_",j))
+print(p)
+  dev.off()
+}
+
+
+```
+
+## timeit
+
+```{r}
+proc_time=((future-now)/60/60/24)[3]
+```
+
+##tau
+
+```{r}
+tau=tau_cache%>%apply(.,1,mean)
+tau_inv=1/tau
+#plot(1/tau)+abline(a=0,b=0)
+```
+
+## ab
+```{r}
+a_pos=a_cache%>%apply(.,c(1,2),mean)
+colnames(a_pos)=paste0("t",1:N)
+rownames(a_pos)=paste0("i",1:V)
+longData=melt(a_pos)
+  colnames(a)=paste0("t",1:N)
+  rownames(a)=paste0("i",1:V)
+  longData_true=melt(a)
+    longData=longData%>%mutate(index="estimate")
+  longData_true=longData_true%>%mutate(index="true")
+longData_diff=longData%>%mutate(index="difference",value=longData_true$value-longData$value)
+  longData_alla=rbind(longData,longData_true,longData_diff)%>%mutate(Var1=fct_rev(Var1),group="a")
+#  longData_alla=rbind(longData,longData_true)%>%mutate(Var1=fct_rev(Var1),group="a")
+b_pos=b_cache%>%apply(.,c(1,2),mean)
+colnames(b_pos)=paste0("t",1:N)
+rownames(b_pos)=paste0("i",1:V)
+longData=melt(b_pos)
+  colnames(b)=paste0("t",1:N)
+  rownames(b)=paste0("i",1:V)
+  longData_true=melt(b)
+    longData=longData%>%mutate(index="estimate")
+  longData_true=longData_true%>%mutate(index="true")
+longData_diff=longData%>%mutate(index="difference",value=longData_true$value-longData$value)
+  longData_allb=rbind(longData,longData_true,longData_diff)%>%mutate(Var1=fct_rev(Var1),group="b")
+#longData_allb=rbind(longData,longData_true)%>%mutate(Var1=fct_rev(Var1),group="b")
+  longdata_all=rbind(longData_alla,longData_allb)
+  
+  p=ggplot(longdata_all, aes(x = Var2, y = Var1)) + 
+  geom_tile(aes(fill=value)) + facet_grid(group~index)+
+  #  scale_fill_gradient(low="white", high="#333333",na.value = "black") +
+  scale_fill_gradient2( low="blue", mid="white",high="red", space ="Lab" )+
+  labs(x="time", y="node") +
+  theme_bw() + theme(axis.text.x=element_blank(),#element_text(size=9, angle=90, vjust=0.3),
+                     axis.text.y=element_blank(),#element_text(size=9),
+                     plot.title=element_text(size=11))+ggtitle("")+
+    guides(fill = guide_colourbar(barheight = 18))
+print(p)
+#dev.print(pdf, paste0("ab1",".pdf"))
+ggsave(filename = "ab.eps",width = 10,height = 6)
+#dev.print(pdf, paste0(today,"_",pars,"_TASKID",ID,"_ab",".pdf"))
+#dev.off()
+
+# ggplot(mtcars, aes(mpg, wt)) + geom_point()
+```
+
+
+##a
+
+```{r}
+
+a_pos=a_cache%>%apply(.,c(1,2),mean)
+colnames(a_pos)=paste0("t",1:N)
+rownames(a_pos)=paste0("i",1:V)
+longData=melt(a_pos)
+  colnames(a)=paste0("t",1:N)
+  rownames(a)=paste0("i",1:V)
+  longData_true=melt(a)
+    longData=longData%>%mutate(index="estimate")
+  longData_true=longData_true%>%mutate(index="true")
+  longData_all=bind_rows(longData,longData_true)
+  longData_all=as_tibble(longData_all)%>%mutate(index=as.factor(index))
+  longData_all=longData_all%>%mutate(Var1=fct_rev(Var1))
+
+  jpeg(filename=paste0("Setting",pars,"_TASKID",ID,"_a_",t,"_0702.jpeg"))
+  p=ggplot(longData_all, aes(x = Var2, y = Var1)) + 
+  geom_raster(aes(fill=value)) + facet_grid(index~.)+
+  scale_fill_gradient(low="grey90", high="red") +
+  labs(x="col", y="row", title="Matrix") +
+  theme_bw() + theme(axis.text.x=element_text(size=9, angle=0, vjust=0.3),
+                     axis.text.y=element_text(size=9),
+                     plot.title=element_text(size=11))+ggtitle("a")
+print(p)
+  dev.off()
+
+  mat=abs(a-a_pos)
+  colnames(mat)=paste0("t",1:N)
+  rownames(mat)=paste0("i",1:V)
+  diff=melt(mat)%>%mutate(Var1=fct_rev(Var1))
+  jpeg(filename=paste0("Setting",pars,"_TASKID",ID,"_a_diff_",t,"_0702.jpeg"))
+p=ggplot(diff, aes(x = Var2, y = Var1)) + 
+  geom_raster(aes(fill=value)) +
+  scale_fill_gradient(low="grey90", high="red") +
+  labs(x="col", y="row", title="Matrix") +
+  theme_bw() + theme(axis.text.x=element_text(size=9, angle=0, vjust=0.3),
+                     axis.text.y=element_text(size=9),
+                     plot.title=element_text(size=11))+ggtitle(a)
+print(p)
+  dev.off()
+
+jpeg(filename=paste0("Setting",pars,"_TASKID",ID,"_a_diff","_0702.jpeg"))
+diffs=(a-a_pos)%>%as.vector(.)
+p=hist(diffs)
+print(p)
+dev.off()
+```
+
+##b
+
+```{r}
+
+b_pos=b_cache%>%apply(.,c(1,2),mean)
+colnames(b_pos)=paste0("t",1:N)
+rownames(b_pos)=paste0("i",1:V)
+longData=melt(b_pos)
+  colnames(b)=paste0("t",1:N)
+  rownames(b)=paste0("i",1:V)
+  longData_true=melt(b)
+    longData=longData%>%mutate(index="estimate")
+  longData_true=longData_true%>%mutate(index="true")
+  longData_all=bind_rows(longData,longData_true)
+  longData_all=as_tibble(longData_all)%>%mutate(index=as.factor(index))
+  longData_all=longData_all%>%mutate(Var1=fct_rev(Var1))
+
+  jpeg(filename=paste0("Setting",pars,"_TASKID",ID,"_b_",t,"_0702.jpeg"))
+  p=ggplot(longData_all, aes(x = Var2, y = Var1)) + 
+  geom_raster(aes(fill=value)) + facet_grid(index~.)+
+  scale_fill_gradient(low="grey90", high="red") +
+  labs(x="col", y="row", title="Matrix") +
+  theme_bw() + theme(axis.text.x=element_text(size=9, angle=0, vjust=0.3),
+                     axis.text.y=element_text(size=9),
+                     plot.title=element_text(size=11))+ggtitle("b")
+print(p)
+  dev.off()
+
+  mat=abs(b-b_pos)
+  colnames(mat)=paste0("t",1:N)
+  rownames(mat)=paste0("i",1:V)
+  diff=melt(mat)%>%mutate(Var1=fct_rev(Var1))
+  jpeg(filename=paste0("Setting",pars,"_TASKID",ID,"_b_diff_",t,"_0702.jpeg"))
+p=ggplot(diff, aes(x = Var2, y = Var1)) + 
+  geom_raster(aes(fill=value)) +
+  scale_fill_gradient(low="grey90", high="red") +
+  labs(x="col", y="row", title="Matrix") +
+  theme_bw() + theme(axis.text.x=element_text(size=9, angle=0, vjust=0.3),
+                     axis.text.y=element_text(size=9),
+                     plot.title=element_text(size=11))+ggtitle(a)
+print(p)
+  dev.off()
+
+jpeg(filename=paste0("Setting",pars,"_TASKID",ID,"_b_diff","_0702.jpeg"))
+diffs=(b-b_pos)%>%as.vector(.)
+p=hist(diffs)
+print(p)
+dev.off()
+```
+
+##a(t)
+
+```{r}
+A_est=a_cache
+a_ci=HPDinterval(as.mcmc(t(A_est%>%matrix(.,nrow=V*N))), prob=0.95)
+a_ci=a_ci%>%as_tibble()
+a_ggdf=data_frame(i=rep(1:V,N),time=rep(1:N,each=V),a_est=apply(A_est,c(1,2),mean)%>%as.vector(.),lower=a_ci%>%pull(lower),upper=a_ci%>%pull(upper))
+
+
+for (j in c(3,5,15)){
+    ai_ggdf=a_ggdf%>%filter(i==j)%>%dplyr::select(.,-i)
+    #jpeg(filename=paste0("Setting",pars,"_TASKID",ID,"_a_",j,"(t)_seed2.jpeg"))
+p=ggplot(ai_ggdf, aes(x=time))+geom_line(mapping = aes(y=a_est),linetype="dashed")+geom_ribbon(aes(ymin=lower,ymax=upper),fill="lightblue",alpha=0.3)+geom_line(mapping = aes(y=a_true),data = data_frame(a_true=a[j,]))+ggtitle(paste0("a_",j))
+print(p)
+  #dev.off()
+}
+
+
+```
+
+##b(t)
+
+```{r}
+B_est=b_cache
+b_ci=HPDinterval(as.mcmc(t(B_est%>%matrix(.,nrow=V*N))), prob=0.95)
+b_ci=b_ci%>%as_tibble()
+b_ggdf=data_frame(i=rep(1:V,N),time=rep(1:N,each=V),b_est=apply(B_est,c(1,2),mean)%>%as.vector(.),lower=b_ci%>%pull(lower),upper=b_ci%>%pull(upper))
+
+
+for (j in c(5,7,11)){
+    bi_ggdf=b_ggdf%>%filter(i==j)%>%dplyr::select(.,-i)
+    #jpeg(filename=paste0("Setting",pars,"_TASKID",ID,"_b_",j,"(t)_seed2.jpeg"))
+p=ggplot(bi_ggdf, aes(x=time))+geom_line(mapping = aes(y=b_est),linetype="dashed")+geom_ribbon(aes(ymin=lower,ymax=upper),fill="lightblue",alpha=0.3)+geom_line(mapping = aes(y=b_true),data = data_frame(b_true=b[j,]))+ggtitle(paste0("b_",j))
+print(p)
+  #dev.off()
+}
+
+```
+
+## output to a txt file
+
+```{r}
+cat(ID, pars, auc,auc_p,eff_pi,eff_mu,eff_tau,eff_beta,eff_a,eff_b, round(proc_time,4),round(tau_inv,4),"\n", file = "all.txt", append = TRUE)
+x=seq(-10,10,0.0001)
+y=1/(1+exp(-x))
+dfxy=data.frame(x=x,y=y)
+ggplot(data = dfxy,mapping = aes(x=x,y=y))+geom_line()+geom_vline(xintercept = 0,linetype='dashed')+
+  geom_hline(yintercept = 0.5,linetype='dashed')
+ggsave(filename = "logistic.pdf",width = 8,height = 4)
+```
+
